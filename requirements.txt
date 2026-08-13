@@ -1,0 +1,24 @@
+# GCF-DDPM Dependencies
+# Python 3.10+
+
+# Core ML
+torch>=2.0.0,<2.3.0
+numpy>=1.24.0,<2.0.0
+
+# Data
+pandas>=2.0.0
+pyarrow>=12.0.0
+av2>=0.3.0
+opencv-python-headless>=4.7.0
+
+# Visualization & Logging
+matplotlib>=3.7.0
+scipy>=1.10.0
+tensorboard>=2.13.0
+
+# Utilities
+pyyaml>=6.0
+tqdm>=4.65.0
+
+# System dependencies (apt, not pip):
+#   libxcb1 libxext6 libxrender1 libgl1-mesa-glx libglib2.0-0 libsm6 libice6 libfontconfig1
