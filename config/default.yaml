@@ -1,0 +1,96 @@
+# GCF-DDPM Configuration — 10k dataset 8×RTX4090 正式训练 v3
+
+model:
+  dim: 256
+  n_heads: 4
+  n_layers: 6
+  ffn_dim: 1024
+  dropout: 0.0
+
+data:
+  train_dir: av2_dataset_1k/train/     # 实际含 11k 场景
+  val_dir: av2_dataset_1k/train/       # TODO: 划分独立 val 集
+  map_dir: null                  # null = auto-detect (official layout or flat layout)
+  n_future: 60               # 6s @ 10Hz
+  n_history: 20              # 2s of history
+  n_lanes: 24
+  lane_feat_dim: 46
+  n_neighbors: 6
+  neighbor_feat_dim: 6
+  velocity_scale: 10.0        # m/s — velocity normalization for neighbor features
+  heading_scale: 3.14159265   # radians — heading normalization (range [-pi, pi] → [-1, 1])
+  scale: 50.0                 # meters — coordinate normalization
+  prior_type: hermite           # "lane" (centerline path), "hermite" (cubic spline), or "linear" (straight line)
+  residual_frame: chord        # "chord" (lon/lat decomposition) or "xy" (isotropic, legacy)
+  residual_scale_lon: 2.0      # meters — longitudinal residual normalization (chord frame), reduced from 2.5 for tighter Hermite residuals
+  residual_scale_lat: 0.8      # meters — lateral residual normalization (chord frame, reduced from 1.0 for tighter Hermite residuals)
+  chord_epsilon: 0.1           # meters — chord length fallback threshold (below → isotropic)
+  dt: 0.1                     # seconds — AV2 10Hz timestep
+  num_workers: 0               # 0 = no multiprocessing (data preloaded in memory, no /dev/shm needed)
+  filter_parking: true         # filter out parking scenarios (training, inference, validation)
+  parking_speed_kph: 3.0       # kph — speed threshold for parking detection
+  parking_min_consecutive_sec: 3.0  # seconds — min consecutive low-speed duration
+
+diffusion:
+  n_steps: 1000
+  inference_steps: 100
+  inference_spacing: quadratic   # "linear" or "quadratic" (more steps at high-t where alpha_bar changes fast)
+  schedule: cosine
+
+training:
+  epochs: 700               # extended from 450 (model still improving at ep449); resume gets warm-restart LR
+  batch_size: 1280              # single-GPU (RTX 4090 24GB); ~15GB peak alloc, 6GB headroom for viz/ckpt
+  lr: 5.0e-4                    # sqrt-scaled from 4e-4 (was for global batch 768, now batch 1280: ×1.29)
+  weight_decay: 0.01
+  output_head_weight_decay: 0.1
+  output_head_lr_mult: 1.0        # output head at full LR (0.1x starved learning, 42% worse than v3)
+  cross_attn_weight_decay: 0.1   # high weight decay prevents norm inflation -> gradient collapse (LR multiplier removed)
+  adaLN_lr_mult: 10.0            # LR multiplier for adaLN params (inverted depth: deep>shallow)
+  adaLN_layer_decay: 0.9        # inverted decay: deeper layers get HIGHER LR (0.9^|n-1-idx|), compensates shallow-layer gradient concentration
+  traj_embed_lr_mult: 5.0        # higher LR to break traj_embed freeze (+2.1% in v5)
+  ema_decay: 0.99                # half-life ~69 steps ≈ 6 epochs (faster EMA tracking after prior change)
+  warmup_steps: 80              # ~10 epochs at bs=1280 (8 steps/epoch); single-GPU needs shorter warmup
+  early_stop_patience: 80        # v8: raised from 50 to avoid early-stop during prior_adherence adaptation
+  use_amp: true                # mixed precision (bf16 on RTX 4090)
+  drop_goal_p: 0.1
+  drop_map_p: 0.1             # 修复模式坍缩：从 1.0 降至 0.1
+  drop_neighbor_p: 0.1
+  lambda_endpoint: 4.0       # starting weight (decays to lambda_endpoint_end)
+  lambda_endpoint_end: 2.0   # final endpoint weight (Hermite endpoint already accurate)
+  auxiliary_losses:
+    enabled: true
+    interval: 1              # every step — temporal coherence is critical
+    min_t: 0
+    max_t: 200               # reverted from 800 — high-t x0_est is unstable (sqrt_recipm1_alpha=3.12 at t=800)
+    grad_clip: 1.0
+    lambda_smooth: 0.5         # working well at 4.4% of total loss
+    lambda_vel: 0.30           # raised 3.75x from 0.08 — was only 0.7% of total
+    lambda_endpoint: 0.3       # raised 3x from 0.1 — was only 0.2% of total
+    lambda_curv: 0.1          # raised 16x from 0.003 — was 0.01% of total (dead weight)
+    lambda_prior: 0.30         # reverted from 1.50 — high weight + buggy loss caused aux loss to spike 50x
+    lambda_join: 0.1           # join velocity continuity (m/s²² in physical space) — anchors future's initial velocity to history's terminal velocity
+    prior_margin: 5            # frames to skip at start/end for prior adherence
+
+inference:
+  n_samples: 20
+  cfg_weight: 2.0
+  dps_eta: 0.1               # 0 = DPS disabled, >0 = enabled
+  dynamic_threshold: 1.5      # Imagen-style x0_est clipping (0=disabled, >0=enabled)
+  smoothing: false            # apply Savitzky-Golay smoothing
+  smoothing_window: 7         # smoothing window length (odd)
+  smoothing_polyorder: 3       # smoothing polynomial order
+  goal_sigma_lon: 0.0         # meters — 0=auto: max(chord*0.10, 0.5), scales with trajectory length
+  goal_sigma_lat: 0.0         # meters — 0=auto: max(chord*0.04, 0.3), scales with trajectory length
+
+logging:
+  grad_norm_interval: 200      # log gradient norms every N steps
+  condition_stats_interval: 1000  # log condition statistics every N steps
+  param_norm_interval: 1000     # log parameter norms every N steps
+  ema_compare_interval: 1      # compare EMA vs raw model every N epochs
+
+visualization:
+  train_sample_interval: 25       # Generate sample trajectory every N epochs
+  train_noise_interval: 1000      # Log noise comparison every N steps
+  train_residual_interval: 1000   # Log residual distribution every N steps
+  inference_sample_steps: 10      # DDIM steps for training-time sampling
+  viz_scenarios: 3               # Number of scenarios to visualize during inference (0=none)
