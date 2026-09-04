@@ -491,6 +491,7 @@ class Argoverse2Dataset(Dataset):
         map_mask = np.zeros(self.n_lanes, dtype=np.float32)
         lane_boundaries_local = []
         drivable_areas_local = []
+        drivable_areas_global = []
         ped_crossings_local = []
         if static_map is not None:
             map_tokens, map_mask, lane_boundaries_local = encode_map_tokens(lane_segments, ref_pos, ref_heading, self.n_lanes)
