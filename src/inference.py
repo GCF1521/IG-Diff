@@ -316,8 +316,10 @@ def inference_worker(gpu_id, gpu_ids, args, cfg, output_dir, result_queue):
     )
 
     # Preload cache and apply parking filter
-    # dataset.preload_cache()
-    dataset.preload_cache(cache_path="output/dataset_cache_viz.pt")
+    dataset.preload_cache(
+        cache_path="output/dataset_cache_viz.pt",
+        preload_workers=cfg["data"].get("preload_workers", 6),
+    )
 
     # Resolve scenario indices to evaluate
     if args.scenario_indices:
