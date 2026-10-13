@@ -7,6 +7,10 @@ Hermite spline (default) or linear interpolation from history endpoint to goal.
 """
 
 import math
+import multiprocessing as mp
+import os
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -26,6 +30,41 @@ from data.normalization import (
     pack_chord, unpack_chord,
     DT, VELOCITY_SCALE, ACCELERATION_SCALE,
 )
+
+
+@dataclass
+class _PreloadTensor:
+    array: np.ndarray
+
+
+def _preload_payload(value, decode=False):
+    """Transfer tensors as NumPy arrays; retain original scene-data types."""
+    if decode and isinstance(value, _PreloadTensor):
+        return torch.from_numpy(value.array)
+    if not decode and isinstance(value, torch.Tensor):
+        return _PreloadTensor(value.numpy())
+    if isinstance(value, dict):
+        return {k: _preload_payload(v, decode) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_preload_payload(v, decode) for v in value)
+    return value
+
+
+_preload_dataset = None
+
+
+def _init_preload_worker(dataset_kwargs):
+    global _preload_dataset
+    import pyarrow
+
+    torch.set_num_threads(1)
+    pyarrow.set_cpu_count(1)
+    pyarrow.set_io_thread_count(1)
+    _preload_dataset = Argoverse2Dataset(**dataset_kwargs)
+
+
+def _preload_one(index):
+    return index, _preload_payload(_preload_dataset._load_item(index))
 
 
 def _compute_centerline_from_boundaries(left_xyz, right_xyz):
@@ -188,11 +227,13 @@ class Argoverse2Dataset(Dataset):
         print(f"  Parking filter: {n_parking}/{n_total} scenarios excluded "
               f"({n_parking/n_total*100:.1f}%), {len(valid)} remaining")
 
-    def preload_cache(self, cache_path: str = "output/dataset_cache.pt"):
+    def preload_cache(self, cache_path: str = "output/dataset_cache.pt",
+                      preload_workers: int = 6):
         """Load all samples into memory before DataLoader workers are forked.
 
         If a disk cache exists, load it directly (seconds). Otherwise, parse
-        all parquet + JSON files and save the result for future runs.
+        all parquet + JSON files with CPU workers and save the result for
+        future runs. Set preload_workers=1 to use the serial path.
         """
         from tqdm import tqdm
         cache_path = Path(cache_path)
@@ -224,13 +265,44 @@ class Argoverse2Dataset(Dataset):
                 self.apply_parking_filter()
             return
 
-        for i in tqdm(range(len(self)), desc="Preloading dataset", disable=False):
-            if i not in self._cache:
+        pending = [i for i in range(len(self.scenario_files)) if i not in self._cache]
+        if preload_workers == 1 or not pending:
+            for i in tqdm(pending, desc="Preloading dataset"):
                 item = self._load_item(i)
                 self._cache[i] = {k: (v.clone() if isinstance(v, torch.Tensor) else
                                       {kk: vv.clone() if isinstance(vv, torch.Tensor) else vv
                                        for kk, vv in v.items()} if isinstance(v, dict) else v)
                                   for k, v in item.items()}
+        else:
+            keys = (
+                "data_dir", "map_dir", "n_future", "n_history", "history_start",
+                "n_lanes", "lane_feat_dim", "n_neighbors", "split", "drop_goal_p",
+                "drop_map_p", "drop_neighbor_p", "return_scene_data", "prior_type",
+                "residual_frame",
+            )
+            dataset_kwargs = {key: getattr(self, key) for key in keys}
+            dataset_kwargs["filter_parking"] = False
+            thread_vars = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+            previous_env = {key: os.environ.get(key) for key in thread_vars}
+            print(f"  Preloading with {preload_workers} CPU workers ...")
+            try:
+                for key in thread_vars:
+                    os.environ[key] = "1"
+                with ProcessPoolExecutor(
+                    max_workers=preload_workers,
+                    mp_context=mp.get_context("spawn"),
+                    initializer=_init_preload_worker,
+                    initargs=(dataset_kwargs,),
+                ) as executor:
+                    items = executor.map(_preload_one, pending, chunksize=8)
+                    for i, payload in tqdm(items, total=len(pending), desc="Preloading dataset"):
+                        self._cache[i] = _preload_payload(payload, decode=True)
+            finally:
+                for key, value in previous_env.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
 
         n = len(self._cache)
         est_mb = 0.0

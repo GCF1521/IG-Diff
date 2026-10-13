@@ -216,7 +216,7 @@ def train(cfg: dict, device: str, resume_from: str = None):
     # inherit the full cache via copy-on-write (no disk I/O at training time)
     if is_main:
         print("Preloading dataset into memory...")
-    dataset.preload_cache()
+    dataset.preload_cache(preload_workers=cfg["data"].get("preload_workers", 6))
 
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True) if world_size > 1 else None
     num_workers = cfg["data"].get("num_workers", 4)

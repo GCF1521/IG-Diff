@@ -27,6 +27,7 @@ data:
   chord_epsilon: 0.1           # meters — chord length fallback threshold (below → isotropic)
   dt: 0.1                     # seconds — AV2 10Hz timestep
   num_workers: 0               # 0 = no multiprocessing (data preloaded in memory, no /dev/shm needed)
+  preload_workers: 6          # CPU preprocessing workers; 1 = serial
   filter_parking: true         # filter out parking scenarios (training, inference, validation)
   parking_speed_kph: 3.0       # kph — speed threshold for parking detection
   parking_min_consecutive_sec: 3.0  # seconds — min consecutive low-speed duration

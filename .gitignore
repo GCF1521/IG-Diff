@@ -1,0 +1,43 @@
+# Python and editor caches
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+
+# Local datasets and generated experiment directories
+/av2_dataset*/
+/output/
+/experiment_logs/
+/viz_output/
+results/
+figures/
+checkpoints/
+logs/
+
+# Model weights, caches and raw data
+*.pt
+*.pth
+*.ckpt
+*.pkl
+*.pickle
+*.npy
+*.npz
+*.parquet
+
+# Generated visualizations and result tables
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+*.webm
+*.avi
+*.csv
+*.tsv
+*.log
+*.bak*
+
+# Local settings
+.env
+.env.*
+!.env.example
